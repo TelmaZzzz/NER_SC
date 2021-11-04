@@ -7,11 +7,8 @@ import logging
 from transformers import AutoTokenizer
 from model import NER_NET, SC_NET
 from train import *
-import json
 import random
 import datetime
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 logging.getLogger().setLevel(logging.INFO)
 LABEL_LIST = ["O", "B-BANK", "I-BANK", "B-PRODUCT", "I-PRODUCT", "B-COMMENTS_N", "I-COMMENTS_N", "B-COMMENTS_ADJ", "I-COMMENTS_ADJ"]
 
@@ -54,13 +51,16 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def build(self, Examples, tokenizer):
         for item in Examples:
-            input_ids = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS]" + item.text + "[SEP]"))
+            input_ids = tokenizer.convert_tokens_to_ids(["[CLS]"] + list(item.text) + ["[SEP]"])
             input_mask = [1] * len(input_ids)
-            ner_labels = self.decoder(item.ner_labels)
+            ner_labels = self.deocder(item.labels)
             self.input_ids.append(input_ids)
             self.input_mask.append(input_mask)
             self.ner_labels.append(ner_labels)
-            self.sc_labels.append([item.sc])
+            self.sc_labels.append([int(item.sc)])
+            if len(input_ids) != len(ner_labels) + 2:
+                logging.warning(f"text: {item.text} \nlen: {len(item.text)}")
+                logging.warning(f"ner: {item.labels} \nlen: {len(item.labels)}")
 
 
 class Collection(object):
@@ -86,10 +86,10 @@ class Collection(object):
             for p in out["input_ids"]:
                 input_max_pad = max(input_max_pad, len(p))
             for p in out["ner_labels"]:
-                output_max_pad = max(output_max_pad, len(p))
+                ner_max_pad = max(ner_max_pad, len(p))
         else:
             input_max_pad = self.config["FIX_LENGTH"]
-            output_max_pad = self.config["FIX_LENGTH"]
+            ner_max_pad = self.config["FIX_LENGTH"]
         for i in range(len(batch)):
             out["input_ids"][i] = out["input_ids"][i] + [self.config["PAD_ID"]] * (input_max_pad - len(out["input_ids"][i]))
             out["input_mask"][i] = out["input_mask"][i] + [0] * (input_max_pad - len(out["input_mask"][i]))
@@ -105,6 +105,7 @@ def prepare_examples(path):
     data = utils.read_from_csv(path)
     Examples = []
     for item in data:
+        # utils.debug("item", item)
         Examples.append(Example(id=item[0], text=item[1], labels=item[2].split(" "), sc=item[3]))
     return Examples
 
@@ -137,11 +138,8 @@ def main(args):
     model.bert.config.bos_token_id = tokenizer.bos_token_id
     model.bert.resize_token_embeddings(len(tokenizer))
     model.bert.config.device = args.device
-    logging.info(f"eos_token_id:{model.config.eos_token_id}")
-    logging.info(f"bos_token_id:{model.config.bos_token_id}")
-    logging.info(f"gpu num:{args.n_gpu}")
-    # DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
-    logging.info(f"local rank:{args.local_rank}")
+    logging.info(f"eos_token_id:{model.bert.config.eos_token_id}")
+    logging.info(f"bos_token_id:{model.bert.config.bos_token_id}")
     model = model.to(args.device)
     args.pad_id = tokenizer.pad_token_id
     logging.info("Prepare Dataset")
@@ -149,7 +147,6 @@ def main(args):
     valid_dataset = BaseDataset(valid_data, tokenizer)
     train_iter = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=Collection(args))
     valid_iter = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
-    # test_iter = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
     logging.info("Start Training")
     Base_train(train_iter, valid_iter, model, args)
 

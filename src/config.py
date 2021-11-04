@@ -19,7 +19,12 @@ def Base_config():
     parser.add_argument("--tokenizer_path", type=str)
     parser.add_argument("--pretrain_path", type=str)
     parser.add_argument("--opt_step", type=int, default=1)
+    parser.add_argument("--l_model", type=int, default=768)
+    parser.add_argument("--dropout", type=float, default=0.3)
     # Predict config
     parser.add_argument("--predict", action="store_true")
     parser.add_argument("--predict_type", type=str, default="ner")
     parser.add_argument("--output", type=str)
+
+    args = parser.parse_args()
+    return args

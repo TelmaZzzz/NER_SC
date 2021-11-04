@@ -2,11 +2,17 @@ import csv
 import torch
 import random
 import numpy as np
+import logging
 
 
 def read_from_csv(path):
+    data = []
     with open(path, "r", encoding="utf-8") as f:
         reader = csv.reader(f)
+        for idx, item in enumerate(reader):
+            if idx > 0:
+                data.append(item)
+    return data
 
 
 def set_seed(seed):
@@ -21,3 +27,7 @@ def d2s(dt, time=False):
         return dt.strftime("%Y_%m_%d")
     else:
         return dt.strftime("%Y_%m_%d_%H_%M")
+
+
+def debug(name, value):
+    logging.debug(f"{name}: {value}")
