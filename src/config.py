@@ -22,6 +22,7 @@ def Base_config():
     parser.add_argument("--l_model", type=int, default=768)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--eval_step", type=int, default=50)
     # Predict config
     parser.add_argument("--predict", action="store_true")
     parser.add_argument("--ner_model_load", type=str)

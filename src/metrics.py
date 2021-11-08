@@ -1,4 +1,5 @@
 from sklearn.metrics import f1_score, cohen_kappa_score
+import logging
 
 
 def get_tuple(list):
@@ -34,5 +35,14 @@ def ner_metrics(predict, gold):
 
 
 def sc_metrics(predict, gold):
+    acc, pp, np = 0, 0, 0
+    for p, g in zip(predict, gold):
+        if p == g:
+            acc += 1
+            if p == 0:
+                np += 1
+            elif p == 1:
+                pp += 1
+    logging.info(f"acc: {acc}, len: {len(predict)}, pp: {pp}, np: {np}, acc/len: {acc / len(predict)}")
     return cohen_kappa_score(gold, predict)
 

@@ -20,8 +20,8 @@ python ../src/Base.py \
 --test_path="$TEST_PATH" \
 --tokenizer_path="$TOKENIZER" \
 --pretrain_path="$PRETRAIN" \
---ner_model_load="$ROOT/model/NER/2021_11_08_00_23_score_0.7484.pkl" \
---sc_model_load="$ROOT/model/SC/2021_11_07_17_45_score_0.4921.pkl" \
+--ner_model_load="$ROOT/model/NER/2021_11_09_00_03_score_0.7496.pkl" \
+--sc_model_load="$ROOT/model/SC/2021_11_08_22_55_score_0.5190.pkl" \
 --batch_size=16 \
---output_path="$ROOT/output/ans_3.csv" \
+--output_path="$ROOT/output/ans_4.csv" \
 > ../log/Base_predict.log 2>&1 &

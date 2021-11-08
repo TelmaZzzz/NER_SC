@@ -72,7 +72,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     TIME = 3
                 elif int(item.sc) == 1:
                     TIME = 8
-            # TIME = 1
+            TIME = 1
             while TIME > 0:
                 TIME -= 1
                 self.input_ids.append(copy.deepcopy(input_ids))
@@ -177,6 +177,7 @@ def main(args):
     random.shuffle(data)
     train_data = data[:int(len(data) * 0.95)]
     valid_data = data[int(len(data) * 0.95):]
+    # utils.predict_use_senta(valid_data)
     logging.info("Init Model and Tokenizer")
     # args.ner_class = len(LABEL_LIST)
     args.ner_class = 5
@@ -214,6 +215,7 @@ def main(args):
     valid_dataset = BaseDataset(valid_data, tokenizer)
     train_dataset.analisy()
     valid_dataset.analisy()
+
     train_iter = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=Collection(args))
     valid_iter = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
     logging.info("Start Training")

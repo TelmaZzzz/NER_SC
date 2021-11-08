@@ -12,9 +12,9 @@ import metrics
 SCOREs = []
 
 
-def train_model(model):
+def train_model(model, layer):
     for k, v in model.named_parameters():
-        if "bert" in k:
+        if f"layer.{layer}" in k:
             v.requires_grad = True
 
 
@@ -160,20 +160,24 @@ def Base_train(train_iter, valid_iter, model, args):
     if args.force:
         force_model(model)
     else:
-        train_model(model)
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            logging.info(f"train name: {name}")
-        else:
-            logging.info(f"force name: {name}")
+        # train_model(model, 11)
+        pass
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         logging.info(f"train name: {name}")
+    #     else:
+    #         logging.info(f"force name: {name}")
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
     scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
     mean_loss = 0
+    batch_step = 0
+    args.step = 1
     LOSS_fn = nn.CrossEntropyLoss(reduction="none")
     for step in range(args.epoch):
         model.train()
         logging.info("Starting Training epoch:{}".format(step+1))
         for idx, item in enumerate(train_iter):
+            batch_step += 1
             input_ids = item["input_ids"].to(args.device)
             input_mask = item["input_mask"].to(args.device)
             # utils.debug("input_ids shape", input_ids.shape)
@@ -194,10 +198,14 @@ def Base_train(train_iter, valid_iter, model, args):
                 loss = torch.mean(loss)
             loss.backward()
             mean_loss += loss.cpu().item()
-            if idx % args.opt_step == args.opt_step - 1:
+            if batch_step % args.opt_step == 0:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+            if batch_step % args.eval_step == 0:
+                with torch.no_grad():
+                    Base_valid(valid_iter, model, args)
+                    model.train()
         args.step = step + 1
         mean_loss /= len(train_iter)
         logging.info("Train loss:{:.4f}".format(mean_loss))

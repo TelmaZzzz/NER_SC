@@ -3,6 +3,8 @@ import torch
 import random
 import numpy as np
 import logging
+import metrics
+from nlpcda import Similarword, Homophone
 
 
 def read_from_csv(path):
