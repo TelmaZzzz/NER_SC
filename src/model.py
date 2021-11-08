@@ -5,6 +5,24 @@ from torch.nn.modules.linear import Linear
 from transformers import AutoModel
 
 
+class Classification_head_v2(nn.Module):
+    def __init__(self, input_size, in_size, output_size, dropout):
+        super(Classification_head_v2, self).__init__()
+        self.dance = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(input_size, in_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(in_size, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, output_size),
+        )
+    
+    def forward(self, x):
+        return self.dance(x)
+
+
 class Classification_head(nn.Module):
     def __init__(self, input_size, in_size, output_size, dropout):
         super(Classification_head, self).__init__()

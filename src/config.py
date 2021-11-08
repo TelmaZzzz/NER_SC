@@ -21,10 +21,12 @@ def Base_config():
     parser.add_argument("--opt_step", type=int, default=1)
     parser.add_argument("--l_model", type=int, default=768)
     parser.add_argument("--dropout", type=float, default=0.3)
+    parser.add_argument("--force", action="store_true")
     # Predict config
     parser.add_argument("--predict", action="store_true")
-    parser.add_argument("--predict_type", type=str, default="ner")
-    parser.add_argument("--output", type=str)
+    parser.add_argument("--ner_model_load", type=str)
+    parser.add_argument("--sc_model_load", type=str)
+    parser.add_argument("--output_path", type=str)
 
     args = parser.parse_args()
     return args

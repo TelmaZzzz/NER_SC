@@ -1,30 +1,71 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import get_linear_schedule_with_warmup, AdamW
+from transformers import get_linear_schedule_with_warmup, AdamW, get_cosine_with_hard_restarts_schedule_with_warmup
 import logging
 import utils
 import math
 import json
 import torch.distributed as dist
 import metrics
+SCOREs = []
 
 
-def save(model, path, step):
-    path += "_epoch{}.pkl".format("{}".format(step))
+def train_model(model):
+    for k, v in model.named_parameters():
+        if "bert" in k:
+            v.requires_grad = True
+
+
+def force_model(model):
+    for k, v in model.named_parameters():
+        if "bert" in k:
+            v.requires_grad = False
+
+
+def save(model, path, score):
+    path = path + "_score_{:.4f}.pkl".format(score)
     logging.info("Save model")
     torch.save(model, path)
 
 
-def Base_predict(test_iter, model, tokenizer, args):
-    raise("predict code")
+def rm(path, score):
+    path = path + "_score_{:.4f}.pkl".format(score)
+    if os.path.exists(path):
+        os.remove(path)
+        logging.info("model remove success!!!")
+
+
+def Base_predict(test_iter, model, args):
+    model.eval()
+    predict_list = []
+    for item in test_iter:
+        input_ids = item["input_ids"].to(args.device)
+        input_mask = item["input_mask"].to(args.device)
+        if args.predict_type == "ner":
+            # ner_labels_mask = (ner_labels != -100)
+            lm_logits = model(input_ids, input_mask)
+            batch_size, seq_len, class_num = lm_logits.shape
+            predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
+            predict_list.extend(predict.tolist())
+        elif args.predict_type == "sc":
+            lm_logits = model(input_ids, input_mask)
+            batch_size, class_num = lm_logits.shape
+            # loss = LOSS_fn(lm_logits.view(-1, class_num), sc_labels.view(-1)).view(batch_size)
+            # loss = torch.mean(loss)
+            predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].reshape(batch_size)
+            predict_list.extend(predict.tolist())
+    return predict_list
 
 
 def Base_valid(valid_iter, model, args):
     model.eval()
+    global SCOREs
     LOSS_fn = nn.CrossEntropyLoss(reduction="none")
-    score_mean = 0
-    total = 0
+    Ss, Gs, SGs = 0, 0, 0
+    predicts = []
+    golds = []
     for item in valid_iter:
         input_ids = item["input_ids"].to(args.device)
         input_mask = item["input_mask"].to(args.device)
@@ -45,50 +86,88 @@ def Base_valid(valid_iter, model, args):
             gold = torch.masked_select(ner_labels, ner_labels_mask)
             utils.debug("predict shape", predict.shape)
             utils.debug("gold shape", gold.shape)
-            score = metrics.ner_metrics(predict.cpu(), gold.cpu())
-            score_mean += score * batch_size
-            total += batch_size
+            # predicts.extend(predict)
+            # golds.extend(golds)
+            S, G, SG = metrics.ner_metrics(predict.cpu(), gold.cpu())
+            Ss += S
+            Gs += G
+            SGs += SG
         elif args.train_type == "sc":
             sc_labels = item["sc_labels"].to(args.device)
             lm_logits = model(input_ids, input_mask)
             batch_size, class_num = lm_logits.shape
             # loss = LOSS_fn(lm_logits.view(-1, class_num), sc_labels.view(-1)).view(batch_size)
             # loss = torch.mean(loss)
-            lm_logits = torch.max(lm_logits, dim=-1)[1].reshape(batch_size)
-            sc_labels = item["ner_labels"].reshape(batch_size)
-            score = metrics.sc_metrics(lm_logits.cpu(), sc_labels.cpu())
-            score_mean += score * batch_size
-            total += batch_size
-    score_mean /= total
+            predict = torch.max(lm_logits, dim=-1)[1].reshape(batch_size)
+            gold = sc_labels.reshape(batch_size)
+            predicts.extend(predict.cpu().tolist())
+            golds.extend(gold.cpu().tolist())
+            # logging.info(f"predict: {predict.cpu().tolist()}")
+            # logging.info(f"gold: {gold.cpu().tolist()}")
+    if args.train_type == "ner":
+        P = SGs / Ss
+        R = SGs / Gs
+        F = 2 * P * R / (P + R)
+        score_mean = F
+    else:
+        score_mean = metrics.sc_metrics(predict=predicts, gold=golds)
     logging.info("epoch{} score:{:.4f}".format(args.step, score_mean))
-    save(model, args.model_save, args.step)
+    if len(SCOREs) < 5:
+        SCOREs.append(score_mean)
+        save(model, args.model_save, score_mean)
+        SCOREs = sorted(SCOREs)
+    else:
+        if score_mean > SCOREs[0]:
+            rm(args.model_save, SCOREs[0])
+            SCOREs.append(score_mean)
+            save(model, args.model_save, score_mean)
+            SCOREs = sorted(SCOREs[1:])
 
 
 def Base_train(train_iter, valid_iter, model, args):
     no_decay = ["bias", "LayerNorm.weight"]
-    # high_lr = ["classification"]
+    high_lr = ["classification"]
     optimizer_grouped_parameters = [
         {
             "params": [
                 p
                 for n, p in model.named_parameters()
-                if not any(nd in n for nd in no_decay)
+                if not any(nd in n for nd in no_decay) and not any(nd in n for nd in high_lr)
             ],
             "weight_decay": args.weight_decay,
-            # "lr": args.learning_rate * 0.1,
+            # "lr": args.lr * 0.1,
         },
         {
             "params": [
                 p
                 for n, p in model.named_parameters()
-                if any(nd in n for nd in no_decay)
+                if any(nd in n for nd in no_decay) and not any(nd in n for nd in high_lr)
             ],
             "weight_decay": 0.0,
-            # "lr": args.learning_rate * 0.1,
+            # "lr": args.lr * 0.1,
+        },
+        {
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if any(nd in n for nd in high_lr)
+            ],
+            "weight_decay": 0.0,
+            # "lr": args.lr,
         },
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, correct_bias=False)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
+    if args.force:
+        force_model(model)
+    else:
+        train_model(model)
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            logging.info(f"train name: {name}")
+        else:
+            logging.info(f"force name: {name}")
+    # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
+    scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
     mean_loss = 0
     LOSS_fn = nn.CrossEntropyLoss(reduction="none")
     for step in range(args.epoch):
