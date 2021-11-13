@@ -4,7 +4,7 @@ import random
 import numpy as np
 import logging
 import metrics
-from nlpcda import Similarword, Homophone
+from nlpcda import Similarword, Homophone, RandomDeleteChar, EquivalentChar
 
 
 def read_from_csv(path):
@@ -33,3 +33,28 @@ def d2s(dt, time=False):
 
 def debug(name, value):
     logging.debug(f"{name}: {value}")
+
+
+def build_Homophone(create_num=3, change_rate=0.3):
+    smw = Homophone(create_num=create_num, change_rate=change_rate)
+    return smw
+
+
+def build_Similarword(create_num=3, change_rate=0.3):
+    smw = Similarword(create_num=create_num, change_rate=change_rate)
+    return smw
+
+
+def build_RandomDeleteChar(create_num=3, change_rate=0.3):
+    smw = RandomDeleteChar(create_num=create_num, change_rate=change_rate)
+    return smw
+
+
+def build_EquivalentChar(create_num=3, change_rate=0.3):
+    smw = EquivalentChar(create_num=create_num, change_rate=change_rate)
+    return smw
+
+
+def do_nlpcda(smw, text):
+    res = smw.replace(text)
+    return res

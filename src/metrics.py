@@ -6,15 +6,15 @@ def get_tuple(list):
     tuples = []
     l, r = 0, 0
     for i in range(1, len(list)):
-        if list[i] == list[i-1]:
+        if list[i] == list[l] + 1 and list[l] % 2 == 1:
             r = i
         else:
-            if list[r] != 0:
-                tuples.append((l, r, list[r]))
-                l = i
-                r = i
-    if list[r] != 0:
-        tuples.append((l, r, list[r]))
+            if list[l] % 2 == 1:
+                tuples.append((l, r, list[l]))
+            l = i
+            r = i
+    if list[l] % 2 == 1:
+        tuples.append((l, r, list[l]))
     return tuples
 
 
@@ -28,9 +28,12 @@ def get_same(S, G):
 
 
 def ner_metrics(predict, gold):
+    # logging.info(f"predict: {predict}")
+    # logging.info(f"gold: {gold}")
     S = get_tuple(predict)
     G = get_tuple(gold)
     SG = get_same(S, G)
+    # logging.info(f"S: {S}. G: {G}. SG: {SG}")
     return len(S), len(G), SG
 
 

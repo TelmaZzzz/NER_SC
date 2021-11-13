@@ -5,7 +5,7 @@ import logging
 # from torch._C import dtype
 # from transformers.utils.dummy_pt_objects import BartForCausalLM, BartModel
 from transformers import AutoTokenizer, BertForSequenceClassification
-from model import NER_NET, SC_NET
+from model import NER_NET, SC_NET, BERT_CRF
 from train import *
 import random
 import datetime
@@ -32,7 +32,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self.ner_labels = []
         self.sc_labels = []
         self.is_train = is_train
-        self.labels_list = ["O", "B-BANK", "I-BANK", "B-PRODUCT", "I-PRODUCT", "B-COMMENTS_N", "I-COMMENTS_N", "B-COMMENTS_ADJ", "I-COMMENTS_ADJ"]
+        self.labels_list = LABEL_LIST
         self.labels_mp = {label: idx for idx, label in enumerate(self.labels_list)}
         if is_predict:
             self.build_predict(Examples, tokenizer)
@@ -54,10 +54,10 @@ class BaseDataset(torch.utils.data.Dataset):
         labels_ids = []
         for label in labels:
             labels_ids.append(self.labels_mp[label])
-            if labels_ids[-1] % 2 == 0 and labels_ids[-1] != 0:
-                labels_ids[-1] /= 2
-            elif labels_ids[-1] % 2 == 1 and labels_ids[-1] != 0:
-                labels_ids[-1] = labels_ids[-1] / 2 + 1
+            # if labels_ids[-1] % 2 == 0 and labels_ids[-1] != 0:
+            #     labels_ids[-1] /= 2
+            # elif labels_ids[-1] % 2 == 1 and labels_ids[-1] != 0:
+            #     labels_ids[-1] = labels_ids[-1] / 2 + 1
         # utils.debug("labels_ids", labels_ids)
         return labels_ids
 
@@ -155,16 +155,41 @@ def real(predict):
     res = []
     for item in predict:
         # logging.info(f"item: {item}")
-        if item == 0:
-            res.append(LABEL_LIST[0])
-            pre = item
-        else:
-            if pre == item:
-                res.append(LABEL_LIST[item * 2])
-            else:
-                res.append(LABEL_LIST[item * 2 - 1])
-            pre = item
+        res.append(LABEL_LIST[item])
+        # if item == 0:
+        #     res.append(LABEL_LIST[0])
+        #     pre = item
+        # else:
+        #     if pre == item:
+        #         res.append(LABEL_LIST[item * 2])
+        #     else:
+        #         res.append(LABEL_LIST[item * 2 - 1])
+        #     pre = item
     return res
+
+
+def extend_data(train_data):
+    smw_E = utils.build_EquivalentChar()
+    smw_R = utils.build_RandomDeleteChar()
+    smw_S = utils.build_Similarword()
+    smw_H = utils.build_Homophone()
+    re_train_data = []
+    for item in train_data:
+        if int(item.sc) in [0, 1, 2]:
+            res = utils.do_nlpcda(smw_E, item.text)
+            re_train_data.extend([Example(id=-1, text=str(r), labels=["O"] * len(r), sc=item.sc) for r in res])
+        if int(item.sc) in [0, 1, 2]:
+            re_train_data.append(item)
+        if int(item.sc) in [0, 1]:
+            res = utils.do_nlpcda(smw_R, item.text)
+            re_train_data.extend([Example(id=-1, text=str(r), labels=["O"] * len(r), sc=item.sc) for r in res])
+        if int(item.sc) in [1]:
+            res = utils.do_nlpcda(smw_S, item.text)
+            re_train_data.extend([Example(id=-1, text=str(r), labels=["O"] * len(r), sc=item.sc) for r in res])
+        if int(item.sc) in [0, 1]:
+            res = utils.do_nlpcda(smw_H, item.text)
+            re_train_data.extend([Example(id=-1, text=str(r), labels=["O"] * len(r), sc=item.sc) for r in res])
+    return re_train_data
 
 
 def main(args):
@@ -172,15 +197,19 @@ def main(args):
     torch.cuda.set_device(0)
     args.device = torch.device("cuda", 0)
     # args.device = torch.device("cpu")
+    if args.crf:
+        LABEL_LIST.extend(["[CLS]", "[SEP]"])
     logging.info("Load Data")
     data = prepare_examples(args.train_path)
     random.shuffle(data)
     train_data = data[:int(len(data) * 0.95)]
     valid_data = data[int(len(data) * 0.95):]
+    # if args.train_type == "sc":
+    #     train_data = extend_data(train_data)
     # utils.predict_use_senta(valid_data)
     logging.info("Init Model and Tokenizer")
     # args.ner_class = len(LABEL_LIST)
-    args.ner_class = 5
+    args.ner_class = len(LABEL_LIST)
     args.sc_class = 3
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
     if args.model_load:
@@ -190,7 +219,10 @@ def main(args):
             if args.model_load:
                 model = torch.load(args.model_load)
             else:
-                model = NER_NET(args)
+                # model = NER_NET(args)
+                tag_to_ix = {label: idx for idx, label in enumerate(LABEL_LIST)}
+                args.tag_to_ix = tag_to_ix
+                model = BERT_CRF(args)
         elif args.train_type == "sc":
             # model = BertForSequenceClassification.from_pretrained(args.pretrain_path)
             # model.config.num_labels = 3
@@ -202,12 +234,20 @@ def main(args):
     tokenizer.add_tokens(word_token)
     tokenizer.eos_token = "[SEP]"
     tokenizer.bos_token = "[CLS]"
-    model.bert.config.eos_token_id = tokenizer.eos_token_id
-    model.bert.config.bos_token_id = tokenizer.bos_token_id
-    model.bert.resize_token_embeddings(len(tokenizer))
-    model.bert.config.device = args.device
-    logging.info(f"eos_token_id:{model.bert.config.eos_token_id}")
-    logging.info(f"bos_token_id:{model.bert.config.bos_token_id}")
+    if args.crf:
+        model.ner_net.bert.config.eos_token_id = tokenizer.eos_token_id
+        model.ner_net.bert.config.bos_token_id = tokenizer.bos_token_id
+        model.ner_net.bert.resize_token_embeddings(len(tokenizer))
+        model.ner_net.bert.config.device = args.device
+        logging.info(f"eos_token_id:{model.ner_net.bert.config.eos_token_id}")
+        logging.info(f"bos_token_id:{model.ner_net.bert.config.bos_token_id}")
+    else:
+        model.bert.config.eos_token_id = tokenizer.eos_token_id
+        model.bert.config.bos_token_id = tokenizer.bos_token_id
+        model.bert.resize_token_embeddings(len(tokenizer))
+        model.bert.config.device = args.device
+        logging.info(f"eos_token_id:{model.bert.config.eos_token_id}")
+        logging.info(f"bos_token_id:{model.bert.config.bos_token_id}")
     model = model.to(args.device)
     args.pad_id = tokenizer.pad_token_id
     logging.info("Prepare Dataset")
@@ -230,23 +270,38 @@ def predict(args):
     logging.info("Load Data")
     test_data = prepare_examples(args.test_path, is_predict=True)
     logging.info("Init Model and Tokenizer")
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+    tokenizer_sc = AutoTokenizer.from_pretrained(args.tokenizer_sc_path)
+    tokenizer_ner = AutoTokenizer.from_pretrained(args.tokenizer_ner_path)
     ner_model = torch.load(args.ner_model_load).to(args.device)
     sc_model = torch.load(args.sc_model_load).to(args.device)
     word_token = ["“", "”", "-"]
-    tokenizer.add_tokens(word_token)
-    tokenizer.pad_token = "[PAD]"
-    tokenizer.eos_token = "[SEP]"
-    tokenizer.bos_token = "[CLS]"
-    args.pad_id = tokenizer.pad_token_id
-    test_dataset = BaseDataset(test_data, tokenizer, args, is_predict=True)
-    test_iter = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
+    tokenizer_sc.add_tokens(word_token)
+    tokenizer_sc.pad_token = "[PAD]"
+    tokenizer_sc.eos_token = "[SEP]"
+    tokenizer_sc.bos_token = "[CLS]"
+    args.pad_id = tokenizer_sc.pad_token_id
+    tokenizer_ner.add_tokens(word_token)
+    tokenizer_ner.pad_token = "[PAD]"
+    tokenizer_ner.eos_token = "[SEP]"
+    tokenizer_ner.bos_token = "[CLS]"
+    sc_test_dataset = BaseDataset(test_data, tokenizer_sc, args, is_predict=True)
+    ner_test_dataset = BaseDataset(test_data, tokenizer_ner, args, is_predict=True)
+    sc_test_iter = torch.utils.data.DataLoader(sc_test_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
+    args.pad_id = tokenizer_ner.pad_token_id
+    if args.crf:
+        args.batch_size = 1
+    ner_test_iter = torch.utils.data.DataLoader(ner_test_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
     logging.info("Start predict")
     with torch.no_grad():
         args.predict_type = "ner"
-        ner_res = Base_predict(test_iter, ner_model, args)
+        ner_res = Base_predict(ner_test_iter, ner_model, args)
         args.predict_type = "sc"
-        sc_res = Base_predict(test_iter, sc_model, args)
+        if args.ensemble:
+            models = [torch.load(args.model1).to(args.device), torch.load(args.model2).to(args.device), \
+                torch.load(args.model3).to(args.device)]
+            sc_res = Base_predict_ensemble(sc_test_iter, models, args)
+        else:
+            sc_res = Base_predict(sc_test_iter, sc_model, args)
         logging.info(f"ner_se len: {len(ner_res)}")
         logging.info(f"sc_res len: {len(sc_res)}")
         assert len(ner_res) == len(sc_res)
@@ -266,7 +321,7 @@ def predict(args):
 
 if __name__ == "__main__":
     args = Base_config()
-    utils.set_seed(959794)    
+    utils.set_seed(args.seed)    
     if args.train:
         args.model_save = '/'.join([args.model_save, utils.d2s(datetime.datetime.now(), time=True)])
         logging.info(f"model_save: {args.model_save}")

@@ -19,9 +19,10 @@ PRETRAIN="hfl/chinese-roberta-wwm-ext-large"
 # PRETRAIN="nghuyong/ernie-1.0"
 # TOKENIZER="bert-base-chinese"
 # PRETRAIN="bert-base-chinese"
+# PRETRAIN="ckiplab/bert-base-chinese-ner"
 # ------------------------------------------------
 # 
-LOAD="$ROOT/model/NER/2021_11_08_00_23_score_0.7484.pkl"
+LOAD="$ROOT/model/NER/2021_11_11_18_15_score_0.7801.pkl"
 TRAIN_PATH="$ROOT/data/train_data_public.csv"
 
 # python -m torch.distributed.launch --nproc_per_node 2 ../src/Base.py \
@@ -33,9 +34,11 @@ python ../src/Base.py \
 --pretrain_path="$PRETRAIN" \
 --model_save="$ROOT/model/$MODEL" \
 --lr=0.00003 \
---batch_size=12 \
+--crf \
+--batch_size=1 \
 --epoch=30 \
---opt_step=5 \
+--opt_step=64 \
+--eval_step=3000 \
+--seed=794959 \
 --l_model=1024 \
---model_load="$LOAD"
 # > ../log/Base_sc.log 2>&1 &

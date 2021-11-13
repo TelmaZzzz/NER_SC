@@ -14,6 +14,9 @@ SCOREs = []
 
 def train_model(model, layer):
     for k, v in model.named_parameters():
+        if layer == -1:
+            if "bert" in k:
+                v.requires_grad = True
         if f"layer.{layer}" in k:
             v.requires_grad = True
 
@@ -37,6 +40,48 @@ def rm(path, score):
         logging.info("model remove success!!!")
 
 
+def Base_predict_ensemble(test_iter, models, args):
+    for model in models:
+        model.eval()
+    predict_list = []
+    for item in test_iter:
+        input_ids = item["input_ids"].to(args.device)
+        input_mask = item["input_mask"].to(args.device)
+        if args.predict_type == "ner":
+            # ner_labels_mask = (ner_labels != -100)
+            lm_logits = None
+            for model in models:
+                if lm_logits is None:
+                    lm_logits = model(input_ids, input_mask)
+                else:
+                    lm_logits += model(input_ids, input_mask)
+            lm_logits /= len(models)
+            batch_size, seq_len, class_num = lm_logits.shape
+            predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
+            predict_list.extend(predict.tolist())
+        elif args.predict_type == "sc":
+            predicts = []
+            for model in models:
+                lm_logits = model(input_ids, input_mask)
+                lm_logits /= len(models)
+                batch_size, class_num = lm_logits.shape
+                # loss = LOSS_fn(lm_logits.view(-1, class_num), sc_labels.view(-1)).view(batch_size)
+                # loss = torch.mean(loss)
+                predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].reshape(batch_size)
+                predicts.append(predict.tolist())
+            for i in range(batch_size):
+                mp = {0:0, 1:0, 2:0}
+                for predict in predicts:
+                    mp[predict[i]] += 1
+                if mp[0] > mp[1] and mp[0] > mp[2]:
+                    predict_list.append(0)
+                elif mp[1] > mp[0] and mp[1] > mp[2]:
+                    predict_list.append(1)
+                else:
+                    predict_list.append(2)
+    return predict_list
+
+
 def Base_predict(test_iter, model, args):
     model.eval()
     predict_list = []
@@ -45,10 +90,14 @@ def Base_predict(test_iter, model, args):
         input_mask = item["input_mask"].to(args.device)
         if args.predict_type == "ner":
             # ner_labels_mask = (ner_labels != -100)
-            lm_logits = model(input_ids, input_mask)
-            batch_size, seq_len, class_num = lm_logits.shape
-            predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
-            predict_list.extend(predict.tolist())
+            if args.crf:
+                predict = model(input_ids, input_mask)[1]
+                predict_list.append(predict)
+            else:
+                lm_logits = model(input_ids, input_mask)
+                batch_size, seq_len, class_num = lm_logits.shape
+                predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
+                predict_list.extend(predict.tolist())
         elif args.predict_type == "sc":
             lm_logits = model(input_ids, input_mask)
             batch_size, class_num = lm_logits.shape
@@ -70,25 +119,24 @@ def Base_valid(valid_iter, model, args):
         input_ids = item["input_ids"].to(args.device)
         input_mask = item["input_mask"].to(args.device)
         if args.train_type == "ner":
-            ner_labels = item["ner_labels"].to(args.device)
-            # ner_labels_mask = (ner_labels != -100)
-            lm_logits = model(input_ids, input_mask)
-            batch_size, seq_len, class_num = lm_logits.shape
-            # loss = LOSS_fn(lm_logits.view(-1, class_num), ner_labels.view(-1)).view(batch_size, seq_len)
-            # loss = torch.mul(loss, ner_labels_mask)
-            # loss = torch.mean(loss)
-            # utils.debug("eval lm_logits 1", lm_logits.shape)
-            lm_logits = torch.max(lm_logits, dim=-1)[1].reshape(batch_size * seq_len)
-            # utils.debug("eval lm_logits 2", lm_logits)
-            ner_labels = ner_labels.reshape(batch_size * seq_len)
-            ner_labels_mask = (ner_labels != -100)
-            predict = torch.masked_select(lm_logits, ner_labels_mask)
-            gold = torch.masked_select(ner_labels, ner_labels_mask)
-            utils.debug("predict shape", predict.shape)
-            utils.debug("gold shape", gold.shape)
+            if args.crf:
+                ner_labels = item["ner_labels"].to(args.device).view(-1).tolist()
+                predict = model(input_ids, input_mask)[1]
+                gold = ner_labels
+            else:
+                ner_labels = item["ner_labels"].to(args.device)
+                lm_logits = model(input_ids, input_mask)
+                batch_size, seq_len, class_num = lm_logits.shape
+                lm_logits = torch.max(lm_logits, dim=-1)[1].reshape(batch_size * seq_len)
+                ner_labels = ner_labels.reshape(batch_size * seq_len)
+                ner_labels_mask = (ner_labels != -100)
+                predict = torch.masked_select(lm_logits, ner_labels_mask)
+                gold = torch.masked_select(ner_labels, ner_labels_mask)
+            utils.debug("predict shape", predict)
+            utils.debug("gold shape", gold)
             # predicts.extend(predict)
             # golds.extend(golds)
-            S, G, SG = metrics.ner_metrics(predict.cpu(), gold.cpu())
+            S, G, SG = metrics.ner_metrics(predict, gold)
             Ss += S
             Gs += G
             SGs += SG
@@ -105,10 +153,13 @@ def Base_valid(valid_iter, model, args):
             # logging.info(f"predict: {predict.cpu().tolist()}")
             # logging.info(f"gold: {gold.cpu().tolist()}")
     if args.train_type == "ner":
-        P = SGs / Ss
-        R = SGs / Gs
-        F = 2 * P * R / (P + R)
-        score_mean = F
+        try:
+            P = SGs / Ss
+            R = SGs / Gs
+            F = 2 * P * R / (P + R)
+            score_mean = F
+        except:
+            score_mean = 0
     else:
         score_mean = metrics.sc_metrics(predict=predicts, gold=golds)
     logging.info("epoch{} score:{:.4f}".format(args.step, score_mean))
@@ -160,13 +211,12 @@ def Base_train(train_iter, valid_iter, model, args):
     if args.force:
         force_model(model)
     else:
-        # train_model(model, 11)
-        pass
-    # for name, param in model.named_parameters():
-    #     if param.requires_grad:
-    #         logging.info(f"train name: {name}")
-    #     else:
-    #         logging.info(f"force name: {name}")
+        train_model(model, args.unforce)
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            logging.info(f"train name: {name}")
+        else:
+            logging.info(f"force name: {name}")
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
     scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=len(train_iter) // args.opt_step, num_training_steps=len(train_iter) * args.epoch // args.opt_step)
     mean_loss = 0
@@ -182,14 +232,19 @@ def Base_train(train_iter, valid_iter, model, args):
             input_mask = item["input_mask"].to(args.device)
             # utils.debug("input_ids shape", input_ids.shape)
             if args.train_type == "ner":
-                ner_labels = item["ner_labels"].to(args.device)
-                # utils.debug("ner_labels shape", ner_labels.shape)
-                ner_labels_mask = (ner_labels != -100)
-                lm_logits = model(input_ids, input_mask)
-                batch_size, seq_len, class_num = lm_logits.shape
-                loss = LOSS_fn(lm_logits.view(-1, class_num), ner_labels.view(-1)).view(batch_size, seq_len)
-                loss = torch.mul(loss, ner_labels_mask)
-                loss = torch.mean(loss)
+                if args.crf:
+                    ner_labels = item["ner_labels"].to(args.device)
+                    loss = model.neg_log_likelihood(input_ids, input_mask, ner_labels.view(-1))
+                    # logging.info(loss)
+                else:
+                    ner_labels = item["ner_labels"].to(args.device)
+                    # utils.debug("ner_labels shape", ner_labels.shape)
+                    ner_labels_mask = (ner_labels != -100)
+                    lm_logits = model(input_ids, input_mask)
+                    batch_size, seq_len, class_num = lm_logits.shape
+                    loss = LOSS_fn(lm_logits.view(-1, class_num), ner_labels.view(-1)).view(batch_size, seq_len)
+                    loss = torch.mul(loss, ner_labels_mask)
+                    loss = torch.mean(loss)
             elif args.train_type == "sc":
                 sc_labels = item["sc_labels"].to(args.device)
                 lm_logits = model(input_ids, input_mask)
