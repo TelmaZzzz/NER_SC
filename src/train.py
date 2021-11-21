@@ -9,7 +9,7 @@ import math
 import json
 import torch.distributed as dist
 import metrics
-SCOREs = []
+LABEL_LIST = ["O", "B-BANK", "I-BANK", "B-PRODUCT", "I-PRODUCT", "B-COMMENTS_N", "I-COMMENTS_N", "B-COMMENTS_ADJ", "I-COMMENTS_ADJ"]
 
 
 def train_model(model, layer):
@@ -49,16 +49,23 @@ def Base_predict_ensemble(test_iter, models, args):
         input_mask = item["input_mask"].to(args.device)
         if args.predict_type == "ner":
             # ner_labels_mask = (ner_labels != -100)
-            lm_logits = None
+            predicts = []
+            add_predict = []
             for model in models:
-                if lm_logits is None:
-                    lm_logits = model(input_ids, input_mask)
+                if args.crf:
+                    predict = model(input_ids, input_mask)[1]
+                    predicts.append(predict)
                 else:
-                    lm_logits += model(input_ids, input_mask)
-            lm_logits /= len(models)
-            batch_size, seq_len, class_num = lm_logits.shape
-            predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
-            predict_list.extend(predict.tolist())
+                    lm_logits = model(input_ids, input_mask)
+                    batch_size, seq_len, class_num = lm_logits.shape
+                    predict = torch.max(F.softmax(lm_logits, dim=-1), dim=-1)[1].view(batch_size, seq_len)
+                    predicts.extend(predict.tolist())
+            for i in range(len(predicts[0])):
+                mp = {idx: 0 for idx in range(len(LABEL_LIST))}
+                for predict in predicts:
+                    mp[predict[i]] += 1
+                add_predict.append(sorted(mp.items(), key=lambda x:x[1], reverse=True)[0][0])
+            predict_list.append(add_predict)
         elif args.predict_type == "sc":
             predicts = []
             for model in models:
@@ -110,7 +117,6 @@ def Base_predict(test_iter, model, args):
 
 def Base_valid(valid_iter, model, args):
     model.eval()
-    global SCOREs
     LOSS_fn = nn.CrossEntropyLoss(reduction="none")
     Ss, Gs, SGs = 0, 0, 0
     predicts = []
@@ -163,16 +169,16 @@ def Base_valid(valid_iter, model, args):
     else:
         score_mean = metrics.sc_metrics(predict=predicts, gold=golds)
     logging.info("epoch{} score:{:.4f}".format(args.step, score_mean))
-    if len(SCOREs) < 5:
-        SCOREs.append(score_mean)
+    if len(args.SCOREs) < 5:
+        args.SCOREs.append(score_mean)
         save(model, args.model_save, score_mean)
-        SCOREs = sorted(SCOREs)
+        args.SCOREs = sorted(args.SCOREs)
     else:
-        if score_mean > SCOREs[0]:
-            rm(args.model_save, SCOREs[0])
-            SCOREs.append(score_mean)
+        if score_mean > args.SCOREs[0]:
+            rm(args.model_save, args.SCOREs[0])
+            args.SCOREs.append(score_mean)
             save(model, args.model_save, score_mean)
-            SCOREs = sorted(SCOREs[1:])
+            args.SCOREs = sorted(args.SCOREs[1:])
 
 
 def Base_train(train_iter, valid_iter, model, args):

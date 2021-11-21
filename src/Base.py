@@ -11,6 +11,7 @@ import random
 import datetime
 import csv
 import copy
+from sklearn.model_selection import KFold
 logging.getLogger().setLevel(logging.INFO)
 LABEL_LIST = ["O", "B-BANK", "I-BANK", "B-PRODUCT", "I-PRODUCT", "B-COMMENTS_N", "I-COMMENTS_N", "B-COMMENTS_ADJ", "I-COMMENTS_ADJ"]
 
@@ -202,64 +203,70 @@ def main(args):
     logging.info("Load Data")
     data = prepare_examples(args.train_path)
     random.shuffle(data)
-    train_data = data[:int(len(data) * 0.95)]
-    valid_data = data[int(len(data) * 0.95):]
-    # if args.train_type == "sc":
-    #     train_data = extend_data(train_data)
-    # utils.predict_use_senta(valid_data)
-    logging.info("Init Model and Tokenizer")
-    # args.ner_class = len(LABEL_LIST)
-    args.ner_class = len(LABEL_LIST)
-    args.sc_class = 3
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
-    if args.model_load:
-        model = torch.load(args.model_load)
-    else:
-        if args.train_type == "ner":
-            if args.model_load:
-                model = torch.load(args.model_load)
-            else:
-                # model = NER_NET(args)
-                tag_to_ix = {label: idx for idx, label in enumerate(LABEL_LIST)}
-                args.tag_to_ix = tag_to_ix
-                model = BERT_CRF(args)
-        elif args.train_type == "sc":
-            # model = BertForSequenceClassification.from_pretrained(args.pretrain_path)
-            # model.config.num_labels = 3
-            if args.model_load:
-                model = torch.load(args.model_load)
-            else:
-                model = SC_NET(args)
-    word_token = ["“", "”", "-"]
-    tokenizer.add_tokens(word_token)
-    tokenizer.eos_token = "[SEP]"
-    tokenizer.bos_token = "[CLS]"
-    if args.crf:
-        model.ner_net.bert.config.eos_token_id = tokenizer.eos_token_id
-        model.ner_net.bert.config.bos_token_id = tokenizer.bos_token_id
-        model.ner_net.bert.resize_token_embeddings(len(tokenizer))
-        model.ner_net.bert.config.device = args.device
-        logging.info(f"eos_token_id:{model.ner_net.bert.config.eos_token_id}")
-        logging.info(f"bos_token_id:{model.ner_net.bert.config.bos_token_id}")
-    else:
-        model.bert.config.eos_token_id = tokenizer.eos_token_id
-        model.bert.config.bos_token_id = tokenizer.bos_token_id
-        model.bert.resize_token_embeddings(len(tokenizer))
-        model.bert.config.device = args.device
-        logging.info(f"eos_token_id:{model.bert.config.eos_token_id}")
-        logging.info(f"bos_token_id:{model.bert.config.bos_token_id}")
-    model = model.to(args.device)
-    args.pad_id = tokenizer.pad_token_id
-    logging.info("Prepare Dataset")
-    train_dataset = BaseDataset(train_data, tokenizer, is_train=True)
-    valid_dataset = BaseDataset(valid_data, tokenizer)
-    train_dataset.analisy()
-    valid_dataset.analisy()
+    xtrain = list(range(len(data)))
+    kfl = KFold(n_splits=5, shuffle=False)
+    PREFIX = args.model_save
+    for step, (train_idx, valid_idx) in enumerate(kfl.split(xtrain)):
+        args.model_save = PREFIX + f"_fold{step}_"
+        args.SCOREs = []
+        train_data = [data[idx] for idx in train_idx]
+        valid_data = [data[idx] for idx in valid_idx]
+        # if args.train_type == "sc":
+        #     train_data = extend_data(train_data)
+        # utils.predict_use_senta(valid_data)
+        logging.info("Init Model and Tokenizer")
+        # args.ner_class = len(LABEL_LIST)
+        args.ner_class = len(LABEL_LIST)
+        args.sc_class = 3
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+        if args.model_load:
+            model = torch.load(args.model_load)
+        else:
+            if args.train_type == "ner":
+                if args.model_load:
+                    model = torch.load(args.model_load)
+                else:
+                    # model = NER_NET(args)
+                    tag_to_ix = {label: idx for idx, label in enumerate(LABEL_LIST)}
+                    args.tag_to_ix = tag_to_ix
+                    model = BERT_CRF(args)
+            elif args.train_type == "sc":
+                # model = BertForSequenceClassification.from_pretrained(args.pretrain_path)
+                # model.config.num_labels = 3
+                if args.model_load:
+                    model = torch.load(args.model_load)
+                else:
+                    model = SC_NET(args)
+        word_token = ["“", "”", "-"]
+        tokenizer.add_tokens(word_token)
+        tokenizer.eos_token = "[SEP]"
+        tokenizer.bos_token = "[CLS]"
+        if args.crf:
+            model.ner_net.bert.config.eos_token_id = tokenizer.eos_token_id
+            model.ner_net.bert.config.bos_token_id = tokenizer.bos_token_id
+            model.ner_net.bert.resize_token_embeddings(len(tokenizer))
+            model.ner_net.bert.config.device = args.device
+            logging.info(f"eos_token_id:{model.ner_net.bert.config.eos_token_id}")
+            logging.info(f"bos_token_id:{model.ner_net.bert.config.bos_token_id}")
+        else:
+            model.bert.config.eos_token_id = tokenizer.eos_token_id
+            model.bert.config.bos_token_id = tokenizer.bos_token_id
+            model.bert.resize_token_embeddings(len(tokenizer))
+            model.bert.config.device = args.device
+            logging.info(f"eos_token_id:{model.bert.config.eos_token_id}")
+            logging.info(f"bos_token_id:{model.bert.config.bos_token_id}")
+        model = model.to(args.device)
+        args.pad_id = tokenizer.pad_token_id
+        logging.info("Prepare Dataset")
+        train_dataset = BaseDataset(train_data, tokenizer, is_train=True)
+        valid_dataset = BaseDataset(valid_data, tokenizer)
+        train_dataset.analisy()
+        valid_dataset.analisy()
 
-    train_iter = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=Collection(args))
-    valid_iter = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
-    logging.info("Start Training")
-    Base_train(train_iter, valid_iter, model, args)
+        train_iter = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=Collection(args))
+        valid_iter = torch.utils.data.DataLoader(valid_dataset, batch_size=args.batch_size, collate_fn=Collection(args))
+        logging.info("Start Training")
+        Base_train(train_iter, valid_iter, model, args)
 
 
 def predict(args):
@@ -294,11 +301,16 @@ def predict(args):
     logging.info("Start predict")
     with torch.no_grad():
         args.predict_type = "ner"
-        ner_res = Base_predict(ner_test_iter, ner_model, args)
+        if args.ensemble:
+            models = [torch.load(args.model_1).to(args.device), torch.load(args.model_2).to(args.device), \
+                torch.load(args.model_3).to(args.device)]
+            ner_res = Base_predict_ensemble(ner_test_iter, models, args)
+        else:
+            ner_res = Base_predict(ner_test_iter, ner_model, args)
         args.predict_type = "sc"
         if args.ensemble:
             models = [torch.load(args.model1).to(args.device), torch.load(args.model2).to(args.device), \
-                torch.load(args.model3).to(args.device)]
+                torch.load(args.model3).to(args.device), torch.load(args.model4).to(args.device), torch.load(args.model5).to(args.device)]
             sc_res = Base_predict_ensemble(sc_test_iter, models, args)
         else:
             sc_res = Base_predict(sc_test_iter, sc_model, args)

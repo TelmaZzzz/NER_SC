@@ -36,9 +36,8 @@ python ../src/Base.py \
 --lr=0.00003 \
 --crf \
 --batch_size=1 \
---epoch=30 \
+--epoch=25 \
 --opt_step=64 \
 --eval_step=3000 \
---seed=794959 \
 --l_model=1024 \
 # > ../log/Base_sc.log 2>&1 &

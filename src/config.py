@@ -38,6 +38,9 @@ def Base_config():
     parser.add_argument("--model3", type=str)
     parser.add_argument("--model4", type=str)
     parser.add_argument("--model5", type=str)
+    parser.add_argument("--model_1", type=str)
+    parser.add_argument("--model_2", type=str)
+    parser.add_argument("--model_3", type=str)
     parser.add_argument("--ensemble", action="store_true")
 
     args = parser.parse_args()
